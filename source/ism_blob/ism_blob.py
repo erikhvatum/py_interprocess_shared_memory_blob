@@ -21,6 +21,12 @@
 # SOFTWARE.
 #
 # Authors: Erik Hvatum
+#
+# NB: OS X did not support sharing mutexes across processes until 10.8, at which point support was added for
+# pthread_rwlock sharing only (at last check, the OS X pthread_rwlockattr_setpshared was out of date, erroneously
+# stating that sharing is not supported).  pthread_mutexes are simpler, having only one flag, and about 2x faster
+# accroding to some simple benchmarking.  In order to accomodate OS X, pthread_rwlocks are used instead, and
+# only the pthread_rwlock write flag is utilized.
 
 import ctypes
 import errno
@@ -30,6 +36,7 @@ import sys
 c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
 c_uint32_p = ctypes.POINTER(ctypes.c_uint32)
 MAP_FAILED = ctypes.cast(-1, ctypes.c_void_p)
+PTHREAD_PROCESS_SHARED = 1
 
 if sys.platform == 'linux':
     libc = ctypes.CDLL('libc.so.6')
@@ -40,6 +47,12 @@ if sys.platform == 'linux':
     mmap       = libc.mmap
     munmap     = libc.munmap
     close      = libc.close
+    pthread_rwlock_destroy = librt.pthread_rwlock_destroy
+    pthread_rwlock_init = librt.pthread_rwlock_init
+    pthread_rwlock_unlock = librt.pthread_rwlock_unlock
+    pthread_rwlock_wrlock = librt.pthread_rwlock_wrlock
+    pthread_rwlockattr_init = librt.pthread_rwlockattr_init
+    pthread_rwlockattr_setpshared = librt.pthread_rwlockattr_setpshared
     O_RDONLY = 0
     O_RDWR   = 2
     O_CREAT  = 64
@@ -51,7 +64,7 @@ if sys.platform == 'linux':
     # NB: 3rd argument, mode_t, is 4 bytes on linux and 2 bytes on osx (64 bit linux and osx, that is.  32
     # bit?  Refer to: http://dilbert.com/strips/comic/1995-06-24/ ...)
     shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32]
-    c_mutexattr = ctypes.c_byte * 4
+    c_rwlockattr_t = ctypes.c_byte * 8
 elif sys.platform == 'darwin':
     libc = ctypes.CDLL('libc.dylib')
     shm_open   = libc.shm_open
@@ -60,6 +73,12 @@ elif sys.platform == 'darwin':
     mmap       = libc.mmap
     munmap     = libc.munmap
     close      = libc.close
+    pthread_rwlock_destroy = libc.pthread_rwlock_destroy
+    pthread_rwlock_init = libc.pthread_rwlock_init
+    pthread_rwlock_unlock = libc.pthread_rwlock_unlock
+    pthread_rwlock_wrlock = libc.pthread_rwlock_wrlock
+    pthread_rwlockattr_init = libc.pthread_rwlockattr_init
+    pthread_rwlockattr_setpshared = libc.pthread_rwlockattr_setpshared
     O_RDONLY = 0
     O_RDWR   = 2
     O_CREAT  = 512
@@ -69,11 +88,11 @@ elif sys.platform == 'darwin':
     PROT_WRITE = 2
     MAP_SHARED = 1
     shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint16]
-    c_mutexattr = ctypes.c_byte * 16
+    c_rwlockattr_t = ctypes.c_byte * 24
 else:
     raise NotImplementedError('Platform "{}" is unsupported.  Only linux and darwin are supported.')
 
-c_mutexattr_p = ctypes.POINTER(c_mutexattr)
+c_rwlockattr_t_p = ctypes.POINTER(c_rwlockattr_t)
 shm_unlink.argtypes = [ctypes.c_char_p]
 ftruncate.argtypes = [ctypes.c_int, ctypes.c_int64]
 mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int64]
