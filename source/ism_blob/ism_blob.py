@@ -27,6 +27,10 @@ import errno
 import numpy
 import sys
 
+c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
+c_uint32_p = ctypes.POINTER(ctypes.c_uint32)
+MAP_FAILED = ctypes.cast(-1, ctypes.c_void_p)
+
 if sys.platform == 'linux':
     libc = ctypes.CDLL('libc.so.6')
     librt = ctypes.CDLL('librt.so.1')
@@ -36,6 +40,7 @@ if sys.platform == 'linux':
     mmap       = libc.mmap
     munmap     = libc.munmap
     close      = libc.close
+    sem_open   = librt.sem_open
     O_RDONLY = 0
     O_RDWR   = 2
     O_CREAT  = 64
@@ -47,6 +52,7 @@ if sys.platform == 'linux':
     # NB: 3rd argument, mode_t, is 4 bytes on linux and 2 bytes on osx (64 bit linux and osx, that is.  32
     # bit?  Refer to: http://dilbert.com/strips/comic/1995-06-24/ ...)
     shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32]
+    SEM_FAILED = c_uint32_p(0)
 elif sys.platform == 'darwin':
     libc = ctypes.CDLL('libc.dylib')
     shm_open   = libc.shm_open
@@ -55,6 +61,7 @@ elif sys.platform == 'darwin':
     mmap       = libc.mmap
     munmap     = libc.munmap
     close      = libc.close
+    sem_open   = libc.sem_open
     O_RDONLY = 0
     O_RDWR   = 2
     O_CREAT  = 512
@@ -64,12 +71,10 @@ elif sys.platform == 'darwin':
     PROT_WRITE = 2
     MAP_SHARED = 1
     shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint16]
+    SEM_FAILED = c_uint32_p(0xffffffffffffffff)
 else:
     raise NotImplementedError('Platform "{}" is unsupported.  Only linux and darwin are supported.')
 
-c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
-c_uint32_p = ctypes.POINTER(ctypes.c_uint32)
-MAP_FAILED = ctypes.cast(-1, ctypes.c_void_p)
 shm_unlink.argtypes = [ctypes.c_char_p]
 ftruncate.argtypes = [ctypes.c_int, ctypes.c_int64]
 mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int64]

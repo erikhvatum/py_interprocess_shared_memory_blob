@@ -17,7 +17,7 @@
 			<Folder
 				Name="test"
 				Filters="">
-				<F N="test/print_type_sizes.cpp"/>
+				<F N="test/print_type_sizes_and_special_values.cpp"/>
 			</Folder>
 		</Folder>
 		<Folder
