@@ -36,28 +36,6 @@ import numpy
 import sys
 import threading
 
-_dts_to_cts = {}
-for t in (ctypes.c_float, ctypes.c_double):
-    _dts_to_cts[">f%s" % ctypes.sizeof(t)] = t.__ctype_be__
-    _dts_to_cts["<f%s" % ctypes.sizeof(t)] = t.__ctype_le__
-for t in (ctypes.c_byte, ctypes.c_short, ctypes.c_int, ctypes.c_long, ctypes.c_longlong):
-    _dts_to_cts[">i%s" % ctypes.sizeof(t)] = t.__ctype_be__
-    _dts_to_cts["<i%s" % ctypes.sizeof(t)] = t.__ctype_le__
-for t in (ctypes.c_ubyte, ctypes.c_ushort, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulonglong):
-    _dts_to_cts[">u%s" % ctypes.sizeof(t)] = t.__ctype_be__
-    _dts_to_cts["<u%s" % ctypes.sizeof(t)] = t.__ctype_le__
-del t
-_dts_to_cts["|b1"] = ctypes.c_bool
-_dts_to_cts["|i1"] = ctypes.c_byte
-_dts_to_cts["|u1"] = ctypes.c_ubyte
-
-def _get_ctype(dtype):
-    '''Get the ctype numpy uses internally to represent dtype.'''
-    try:
-        return _dts_to_cts[dtype.descr[0][1]]
-    except KeyError:
-        raise ValueError("Cannot convert dtype to ctype: {0}".format(dt))
-
 c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
 c_uint32_p = ctypes.POINTER(ctypes.c_uint32)
 c_uint64_p = ctypes.POINTER(ctypes.c_uint64)
@@ -187,6 +165,28 @@ def _refCountLock(p_header):
     pthread_rwlock_wrlock(ctypes.byref(p_header[0].refCountLock))
     yield
     pthread_rwlock_unlock(ctypes.byref(p_header[0].refCountLock))
+
+_dts_to_cts = {}
+for t in (ctypes.c_float, ctypes.c_double):
+    _dts_to_cts[">f%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<f%s" % ctypes.sizeof(t)] = t.__ctype_le__
+for t in (ctypes.c_byte, ctypes.c_short, ctypes.c_int, ctypes.c_long, ctypes.c_longlong):
+    _dts_to_cts[">i%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<i%s" % ctypes.sizeof(t)] = t.__ctype_le__
+for t in (ctypes.c_ubyte, ctypes.c_ushort, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulonglong):
+    _dts_to_cts[">u%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<u%s" % ctypes.sizeof(t)] = t.__ctype_le__
+del t
+_dts_to_cts["|b1"] = ctypes.c_bool
+_dts_to_cts["|i1"] = ctypes.c_byte
+_dts_to_cts["|u1"] = ctypes.c_ubyte
+
+def _get_ctype(dtype):
+    '''Get the ctype numpy uses internally to represent dtype.'''
+    try:
+        return _dts_to_cts[dtype.descr[0][1]]
+    except KeyError:
+        raise ValueError("Cannot convert dtype to ctype: {0}".format(dt))
 
 class ISMBlob:
     '''ISMBlob, "Interprocess Shared Memory Blob", provides allocation, reference counting, and automatic deallocation
