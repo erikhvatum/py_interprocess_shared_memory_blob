@@ -21,7 +21,7 @@
 # SOFTWARE.
 #
 # Authors: Erik Hvatum
-#
+
 # NB: OS X did not support sharing mutexes across processes until 10.8, at which point support was added for
 # pthread_rwlock sharing only (at last check, the OS X pthread_rwlockattr_setpshared man page was out of date,
 # falsely stating that sharing is not supported).  pthread_mutexes are simpler, having only one flag, and are
@@ -31,9 +31,32 @@
 import contextlib
 import ctypes
 import errno
+import functools
 import numpy
 import sys
 import threading
+
+_dts_to_cts = {}
+for t in (ctypes.c_float, ctypes.c_double):
+    _dts_to_cts[">f%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<f%s" % ctypes.sizeof(t)] = t.__ctype_le__
+for t in (ctypes.c_byte, ctypes.c_short, ctypes.c_int, ctypes.c_long, ctypes.c_longlong):
+    _dts_to_cts[">i%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<i%s" % ctypes.sizeof(t)] = t.__ctype_le__
+for t in (ctypes.c_ubyte, ctypes.c_ushort, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulonglong):
+    _dts_to_cts[">u%s" % ctypes.sizeof(t)] = t.__ctype_be__
+    _dts_to_cts["<u%s" % ctypes.sizeof(t)] = t.__ctype_le__
+del t
+_dts_to_cts["|b1"] = ctypes.c_bool
+_dts_to_cts["|i1"] = ctypes.c_byte
+_dts_to_cts["|u1"] = ctypes.c_ubyte
+
+def _get_ctype(dtype):
+    '''Get the ctype numpy uses internally to represent dtype.'''
+    try:
+        return _dts_to_cts[dtype.descr[0][1]]
+    except KeyError:
+        raise ValueError("Cannot convert dtype to ctype: {0}".format(dt))
 
 c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
 c_uint32_p = ctypes.POINTER(ctypes.c_uint32)
@@ -166,8 +189,27 @@ def _refCountLock(p_header):
     pthread_rwlock_unlock(ctypes.byref(p_header[0].refCountLock))
 
 class ISMBlob:
+    '''ISMBlob, "Interprocess Shared Memory Blob", provides allocation, reference counting, and automatic deallocation
+    of an interprocess shared memory region identified by a name string.  The ISMBlob.create_with_numpy_view and
+    ISMBlob.open_with_numpy_view factory functions are available for the special case of creating a new numpy ndarray
+    in shared memroy and for obtaining a reference to an existing shared ndarray, respectively.  For example, in Python
+    process A:
+        import numpy
+        import ism_blob
+        ablob, a = ism_blob.ISMBlob.create_with_numpy_view('foo', (10,10), numpy.uint32)
+        a[4,5] = 120
+    Subsequently, in Python process B:
+        import numpy
+        import ism_blob
+        ablob, a = ism_blob.ISMBlob.open_with_numpy_view('foo', (10,10), numpy.uint32)
+        print(a[4,5])
+    .. 120
+
+    A shared memory region is destroyed when the last ISMBlob referring to it is destroyed.  As a consequence, when using
+    the create/open_with_numpy_view functions, the ISMBlob returned with the array should be retained while the array
+    exists.'''
     def __init__(self, name, size, create=False, createPermissions=0o600):
-        '''Note: 0o600 represents the unix permission value readable/writeable by owner'''
+        '''Note: 0o600, or 384, represents the unix permission "readable/writeable by owner".'''
         if size <= 0:
             raise ValueError('size must be a positive integer (or floating point value, which will be rounded down).')
         self._fd = None
@@ -234,6 +276,37 @@ class ISMBlob:
                 # Oops, allocation failed.  Get rid of the partially initialized shared memory region.
                 shm_unlink(self._name)
 
+    @classmethod
+    def create_with_numpy_view(cls, name, shape, dtype, permissions=0o600):
+        '''Returns a tuple containing a new ISMBlob and a numpy ndarray that is a view of the ISMBlob's shared memory region.
+        The ISMBlob created is identified by the value in the name argument and is of size sufficient to hold the requested
+        ndarray.  Note that the memory backing the ndarray is reference counted by ISMBlob; when the last ISMBlob with the
+        same name across every process on the system referring to that region is deleted, the ndarray's backing memory is
+        freed.  It is advisable to retain a reference to the ISMBlob while its associated ndarray exists.
+
+        Note: 0o600, or 384, represents the unix permission "readable/writeable by owner".'''
+        dt = numpy.dtype(dtype)
+        ct = _get_ctype(dt)
+        pct = ctypes.POINTER(ct)
+        size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
+        ismb = cls(name, size, True, permissions)
+        ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+        return ismb, ndarray
+
+    @classmethod
+    def open_with_numpy_view(cls, name, shape, dtype):
+        '''Returns a tuple containing an ISMBlob referring to an existing shared memory blob.  Note that the memory backing the 
+        ndarray is reference counted by ISMBlob; when the last ISMBlob with the same name across every process on the system 
+        referring to that region is deleted, the ndarray's backing memory is freed.  It is advisable to retain a reference to 
+        the ISMBlob while its associated ndarray exists.'''
+        dt = numpy.dtype(dtype)
+        ct = _get_ctype(dt)
+        pct = ctypes.POINTER(ct)
+        size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
+        ismb = cls(name, size)
+        ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+        return ismb, ndarray
+
     @property
     def name(self):
         return self._name.decode('utf-8')
@@ -244,4 +317,4 @@ class ISMBlob:
 
     @property
     def data(self):
-        return self._userData        
+        return self._userData
