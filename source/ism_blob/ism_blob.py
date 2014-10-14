@@ -69,7 +69,7 @@ def _get_ctype(dtype):
     try:
         return _dts_to_cts[dtype.descr[0][1]]
     except KeyError:
-        raise ValueError("Cannot convert dtype to ctype: {0}".format(dt))
+        raise ValueError("Cannot convert dtype to ctype: {0}".format(dtype))
 
 # Set up ctype types and wrappers for various system API functions.  The differences between the Linux and OS X
 # calls and types that we require are slim , allowing both to share code after this section.
