@@ -21,3 +21,5 @@
 # SOFTWARE.
 
 from .ism_blob import ISMBlob
+
+__version__ = '0.5'
