@@ -35,6 +35,7 @@ import ctypes
 import errno
 import functools
 import numpy
+import os
 import sys
 import threading
 
@@ -76,8 +77,8 @@ def _get_ctype(dtype):
 
 if sys.platform == 'linux':
     ############################################ Linux ########################################################
-    _libc = ctypes.CDLL('libc.so.6')
-    _librt = ctypes.CDLL('librt.so.1')
+    _libc = ctypes.CDLL('libc.so.6', use_errno=True)
+    _librt = ctypes.CDLL('librt.so.1', use_errno=True)
     _shm_open   = _librt.shm_open
     _shm_unlink = _librt.shm_unlink
     _ftruncate  = _libc.ftruncate
@@ -105,7 +106,7 @@ if sys.platform == 'linux':
     _c_pthread_rwlock_t = ctypes.c_byte * 56
 elif sys.platform == 'darwin':
     ############################################ OS X #########################################################
-    _libc = ctypes.CDLL('libc.dylib')
+    _libc = ctypes.CDLL('libc.dylib', use_errno=True)
     _shm_open   = _libc.shm_open
     _shm_unlink = _libc.shm_unlink
     _ftruncate  = _libc.ftruncate
@@ -193,7 +194,7 @@ if sys.platform != 'win32':
 
     def _pthread_errcheck(funcName, result, func, args):
         if result != 0:
-            raise OSError(result, '{}(..) failed: {}'.format(funcName, errno.errorcode.get(result, 'UNKNOWN ERROR')))
+            raise OSError(result, '{}(..) failed: {}'.format(funcName, _describe_sys_errno(result)))
         return result
 
     def _osfunc_errcheck(funcName, result, func, args):
@@ -201,7 +202,7 @@ if sys.platform != 'win32':
             e = ctypes.get_errno()
             if e == 0:
                 raise RuntimeError(funcName + ' failed, but errno is 0.')
-            raise OSError(e, funcName + ' failed: ' + str(errno.errorcode.get(e, 'UNKNOWN ERROR')))
+            raise OSError(e, funcName + ' failed: ' + _describe_sys_errno(e))
         return result
 
     def _mmap_errcheck(result, func, args):
@@ -209,8 +210,15 @@ if sys.platform != 'win32':
             e = ctypes.get_errno()
             if e == 0:
                 raise RuntimeError('mmap failed, but errno is 0.')
-            raise OSError(e, 'mmap failed: ' + errno.errorcode.get(e, 'UNKNOWN ERROR'))
+            raise OSError(e, 'mmap failed: ' + _describe_sys_errno(e))
         return result
+
+    def _describe_sys_errno(e):
+        try:
+            strerror = os.strerror(e)
+        except ValueError:
+            strerror = 'no description available'
+        return '{} ({})'.format(strerror, errno.errorcode.get(e, 'UNKNOWN ERROR'))
 
     _c_pthread_rwlockattr_t_p = ctypes.POINTER(_c_pthread_rwlockattr_t)
     _c_pthread_rwlock_t_p = ctypes.POINTER(_c_pthread_rwlock_t)
