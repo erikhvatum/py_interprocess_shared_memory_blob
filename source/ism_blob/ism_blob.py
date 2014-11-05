@@ -401,6 +401,11 @@ if sys.platform != 'win32':
         @property
         def data(self):
             return self._userData
+
+        @property
+        def shared_refcount(self):
+            with _refCountLock(self._p_header):
+                return self._p_header[0].refCount
 else:
     ###########################################################################################################
     ############################################### win32 #####################################################
