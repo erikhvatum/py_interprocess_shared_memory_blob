@@ -373,7 +373,7 @@ if sys.platform != 'win32':
             pct = ctypes.POINTER(ct)
             size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
             ismb = cls(name, size, True, permissions)
-            ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+            ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=tuple(shape))
             return ismb, ndarray
 
         @classmethod
@@ -387,7 +387,7 @@ if sys.platform != 'win32':
             pct = ctypes.POINTER(ct)
             size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
             ismb = cls(name, size)
-            ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+            ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=tuple(shape))
             return ismb, ndarray
 
         @property
@@ -523,7 +523,7 @@ else:
 #           pct = ctypes.POINTER(ct)
 #           size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
 #           ismb = cls(name, size, True, permissions)
-#           ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+#           ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=tuple(shape))
 #           return ismb, ndarray
 #
 #       @classmethod
@@ -537,7 +537,7 @@ else:
 #           pct = ctypes.POINTER(ct)
 #           size = ctypes.sizeof(ct) * functools.reduce(lambda a,b:a*b, shape)
 #           ismb = cls(name, size)
-#           ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=shape)
+#           ndarray = numpy.ctypeslib.as_array(ctypes.cast(ismb.data, pct), shape=tuple(shape))
 #           return ismb, ndarray
 #
 #       @property
