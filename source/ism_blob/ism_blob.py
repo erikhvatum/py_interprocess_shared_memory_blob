@@ -348,7 +348,6 @@ if sys.platform != 'win32':
                             destroy = True
                 finally:
                     if destroy:
-                        print('destroying {}'.format(self.name))
                         _pthread_rwlock_destroy(ctypes.byref(self._p_header[0].refCountLock))
                         _shm_unlink(self._name)
                     _munmap(self._data, self._size)
