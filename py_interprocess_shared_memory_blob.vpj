@@ -12,7 +12,10 @@
 				Name="ism_blob"
 				Filters="">
 				<F N="source/ism_blob/__init__.py"/>
+				<F N="source/ism_blob/ism_base.py"/>
 				<F N="source/ism_blob/ism_blob.py"/>
+				<F N="source/ism_blob/ism_posix.py"/>
+				<F N="source/ism_blob/ism_win32.py"/>
 			</Folder>
 			<Folder
 				Name="test"
