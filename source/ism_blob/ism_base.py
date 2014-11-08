@@ -34,10 +34,10 @@ class ISMBase:
         return cls(name).typed_numpy_view()
 
     @classmethod
-    def new_ism_array(cls, name, dtype, shape, order='C', permissions=0o600):
+    def new_ism_array(cls, name, shape, dtype, order='C', permissions=0o600):
         dtype = numpy.dtype(dtype)
         size = numpy.multiply.reduce(shape, dtype=int) * dtype.itemsize
-        descr = pickle.dumps((dtype.descr, shape, order), protocol=-1)
+        descr = pickle.dumps((dtype, shape, order), protocol=-1)
         return cls(name, create=True, permissions=permissions, size=size, descr=descr).typed_numpy_view()
 
     def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
@@ -48,7 +48,6 @@ class ISMBase:
     def typed_numpy_view(self):
         array = numpy.array(self, dtype=numpy.uint8, copy=False)
         if self.descr:
-            descr_type, shape, order = pickle.loads(self.descr)
-            dtype = numpy.dtype(descr_type)
+            dtype, shape, order = pickle.loads(self.descr)
             array = numpy.ndarray(shape, dtype=dtype, order=order, buffer=array)
         return array
