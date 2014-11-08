@@ -34,6 +34,7 @@ import contextlib
 import ctypes
 import errno
 import os
+import mmap
 import sys
 
 from . import ism_base
@@ -42,87 +43,41 @@ from . import ism_base
 # calls and types that we require are slim, allowing both to share code after this section.
 
 if sys.platform == 'linux':
-    libc = ctypes.CDLL('libc.so.6', use_errno=True)
-    librt = ctypes.CDLL('librt.so.1', use_errno=True)
-    shm_open   = librt.shm_open
-    shm_unlink = librt.shm_unlink
-    ftruncate  = libc.ftruncate
-    mmap       = libc.mmap
-    munmap     = libc.munmap
-    close      = libc.close
-    pthread_rwlock_destroy = librt.pthread_rwlock_destroy
-    pthread_rwlock_init = librt.pthread_rwlock_init
-    pthread_rwlock_unlock = librt.pthread_rwlock_unlock
-    pthread_rwlock_wrlock = librt.pthread_rwlock_wrlock
-    pthread_rwlockattr_destroy = librt.pthread_rwlockattr_destroy
-    pthread_rwlockattr_init = librt.pthread_rwlockattr_init
-    pthread_rwlockattr_setpshared = librt.pthread_rwlockattr_setpshared
-    O_RDONLY = 0
-    O_RDWR   = 2
-    O_CREAT  = 64
-    O_EXCL   = 128
-    PROT_READ  = 1
-    PROT_WRITE = 2
-    MAP_SHARED = 1
+    lib = ctypes.CDLL('librt.so.1', use_errno=True)
     # NB: 3rd argument, mode_t, is 4 bytes on linux and 2 bytes on osx (64 bit linux and osx, that is.  I
     # haven't had a chance to try this on 32-bit platforms, but patches / pull requests are welcome.)
-    shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32]
+    shm_open_argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32]
     pthread_rwlockattr_t = ctypes.c_byte * 8
     pthread_rwlock_t = ctypes.c_byte * 56
-    
 elif sys.platform == 'darwin':
-    libc = ctypes.CDLL('libc.dylib', use_errno=True)
-    shm_open   = libc.shm_open
-    shm_unlink = libc.shm_unlink
-    ftruncate  = libc.ftruncate
-    mmap       = libc.mmap
-    munmap     = libc.munmap
-    close      = libc.close
-    pthread_rwlock_destroy = libc.pthread_rwlock_destroy
-    pthread_rwlock_init = libc.pthread_rwlock_init
-    pthread_rwlock_unlock = libc.pthread_rwlock_unlock
-    pthread_rwlock_wrlock = libc.pthread_rwlock_wrlock
-    pthread_rwlockattr_destroy = libc.pthread_rwlockattr_destroy
-    pthread_rwlockattr_init = libc.pthread_rwlockattr_init
-    pthread_rwlockattr_setpshared = libc.pthread_rwlockattr_setpshared
-    O_RDONLY = 0
-    O_RDWR   = 2
-    O_CREAT  = 512
-    O_EXCL   = 2048
-    PROT_READ  = 1
-    PROT_WRITE = 2
-    MAP_SHARED = 1
-    shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint16]
+    lib = ctypes.CDLL('libc.dylib', use_errno=True)
+    shm_open_argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint16]
     pthread_rwlockattr_t = ctypes.c_byte * 24
     pthread_rwlock_t = ctypes.c_byte * 200
-    
 else:
     raise NotImplementedError("ism_blob's POSIX implementation is currently only for Linux and Darwin")
 
-MAP_FAILED = ctypes.c_void_p(-1).value
-NULL_P = ctypes.c_void_p(0)
+pthread_rwlockattr_t_p = ctypes.POINTER(pthread_rwlockattr_t)
+pthread_rwlock_t_p = ctypes.POINTER(pthread_rwlock_t)
 PTHREAD_PROCESS_SHARED = 1
 
-def pthread_errcheck(funcName, result, func, args):
-    if result != 0:
-        raise OSError(result, '{}(..) failed: {}'.format(funcName, describe_sys_errno(result)))
-    return result
-
-def osfunc_errcheck(funcName, result, func, args):
-    if result < 0:
-        e = ctypes.get_errno()
-        if e == 0:
-            raise RuntimeError(funcName + ' failed, but errno is 0.')
-        raise OSError(e, funcName + ' failed: ' + describe_sys_errno(e))
-    return result
-
-def mmap_errcheck(result, func, args):
-    if result == 0 or result == MAP_FAILED:
-        e = ctypes.get_errno()
-        if e == 0:
-            raise RuntimeError('mmap failed, but errno is 0.')
-        raise OSError(e, 'mmap failed: ' + describe_sys_errno(e))
-    return result
+def register_lib_func(func_name, argtypes, err='pthread'):
+    func = getattr(lib, func_name)
+    func.argtypes = argtypes
+    if err == 'pthread':
+        def errcheck(result, func, args):
+            if result != 0:
+                raise OSError(result, '{}(..) failed: {}'.format(func_name, describe_sys_errno(result)))
+            return result
+    elif err == 'os':        
+        def errcheck(result, func, args):
+            if result < 0:
+                e = ctypes.get_errno()
+                if e == 0:
+                    raise RuntimeError(func_name + ' failed, but errno is 0.')
+                raise OSError(e, func_name + ' failed: ' + describe_sys_errno(e))
+            return result
+    func.errcheck = errcheck
 
 def describe_sys_errno(e):
     try:
@@ -131,40 +86,20 @@ def describe_sys_errno(e):
         strerror = 'no description available'
     return '{} ({})'.format(strerror, errno.errorcode.get(e, 'UNKNOWN ERROR'))
 
-pthread_rwlockattr_t_p = ctypes.POINTER(pthread_rwlockattr_t)
-pthread_rwlock_t_p = ctypes.POINTER(pthread_rwlock_t)
-shm_unlink.argtypes = [ctypes.c_char_p]
-ftruncate.argtypes = [ctypes.c_int, ctypes.c_int64]
-mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int64]
-mmap.restype = ctypes.c_void_p
-mmap.errcheck = mmap_errcheck
-munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-close.argtypes = [ctypes.c_int]
-pthread_rwlock_destroy.argtypes = [pthread_rwlock_t_p]
-pthread_rwlock_init.argtypes = [pthread_rwlock_t_p, pthread_rwlockattr_t_p]
-pthread_rwlock_unlock.argtypes = [pthread_rwlock_t_p]
-pthread_rwlock_wrlock.argtypes = [pthread_rwlock_t_p]
-pthread_rwlockattr_destroy.argtypes = [pthread_rwlockattr_t_p]
-pthread_rwlockattr_init.argtypes = [pthread_rwlockattr_t_p]
-pthread_rwlockattr_setpshared.argtypes = [pthread_rwlockattr_t_p, ctypes.c_int]
-for funcName in (
-    'pthread_rwlock_destroy',
-    'pthread_rwlock_init',
-    'pthread_rwlock_unlock',
-    'pthread_rwlock_wrlock',
-    'pthread_rwlockattr_destroy',
-    'pthread_rwlockattr_init',
-    'pthread_rwlockattr_setpshared'):
-    eval(funcName).errcheck = lambda result, func, args, funcName=funcName: pthread_errcheck(funcName, result, func, args)
-for funcName in (
-    'shm_open',
-    'shm_unlink',
-    'ftruncate',
-    'munmap',
-    'close'):
-    eval(funcName).errcheck = lambda result, func, args, funcName=funcName: osfunc_errcheck(funcName, result, func, args)
-del funcName
+API = [
+    ('pthread_rwlock_destroy', [pthread_rwlock_t_p], 'pthread'),
+    ('pthread_rwlock_init', [pthread_rwlock_t_p, pthread_rwlockattr_t_p], 'pthread'),
+    ('pthread_rwlock_unlock', [pthread_rwlock_t_p], 'pthread'),
+    ('pthread_rwlock_wrlock', [pthread_rwlock_t_p], 'pthread'),
+    ('pthread_rwlockattr_destroy', [pthread_rwlockattr_t_p], 'pthread'),
+    ('pthread_rwlockattr_init', [pthread_rwlockattr_t_p], 'pthread'),
+    ('pthread_rwlockattr_setpshared', [pthread_rwlockattr_t_p, ctypes.c_int], 'pthread'),
+    ('shm_open', shm_open_argtypes, 'os'),
+    ('shm_unlink', [ctypes.c_char_p], 'os')
+]
 
+for func_name, argtypes, err in API:
+    register_lib_func(func_name, argtypes, err)
 
 # layout of ISMBlob: SizeHeader, descr, data, RefCountHeader
 # RefCountHeader is last so that clients that don't care about refcounting
@@ -182,8 +117,6 @@ class RefCountHeader(ctypes.Structure):
         ('refcount', ctypes.c_uint64),
     ]
 
-SizeHeaderSize = ctypes.sizeof(SizeHeader)
-
 class ISMBlob(ism_base.ISMBase):    
     def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
         '''Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
@@ -196,15 +129,12 @@ class ISMBlob(ism_base.ISMBase):
                 self.size = size
                 descr_size = len(descr)
             else:
-                self._fd = shm_open(self._name, O_RDWR, 0)
-                size_header_addr = mmap(NULL_P, SizeHeaderSize, PROT_READ, MAP_SHARED, self._fd, 0)
-                try:
-                    size_header = SizeHeader.from_address(size_header_addr)
+                self._fd = lib.shm_open(self._name, os.O_RDWR, 0)
+                with mmap.mmap(self._fd, ctypes.sizeof(SizeHeader), prot=mmap.PROT_READ) as size_header_mmap:
+                    size_header = SizeHeader.from_buffer_copy(size_header_mmap)
                     assert size_header.magic_cookie == self._MAGIC_COOKIE
                     self.size = size_header.data_size
                     descr_size = size_header.descr_size
-                finally:
-                    munmap(size_header_addr, SizeHeaderSize)
         
             class DataLayout(ctypes.Structure):
                 _fields_ = [
@@ -213,16 +143,15 @@ class ISMBlob(ism_base.ISMBase):
                     ('data', ctypes.c_ubyte*self.size),
                     ('refcount_header', RefCountHeader)
                 ]
-            self._mmap_size = ctypes.sizeof(DataLayout)
+            mmap_size = ctypes.sizeof(DataLayout)
         
             if create:
                 # if we're creating it, open the fd now. If it was extant, the fd already got opened above
-                self._fd = shm_open(self._name, O_RDWR | O_CREAT | O_EXCL, permissions)
-                os.ftruncate(self._fd, self._mmap_size)
+                self._fd = lib.shm_open(self._name, os.O_RDWR | os.O_CREAT | os.O_EXCL, permissions)
+                os.ftruncate(self._fd, mmap_size)
             
-            self._mmap_data = mmap(NULL_P, self._mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, self._fd, 0)
-            # TODO: do we need MAP_HASSEMAPHORE above as well??
-            data_layout = DataLayout.from_address(self._mmap_data)
+            self._mmap = mmap.mmap(self._fd, mmap_size)
+            data_layout = DataLayout.from_buffer(self._mmap)
             self._refcount_header = data_layout.refcount_header
             self.data = data_layout.data
             self.__array_interface__ = {
@@ -241,14 +170,14 @@ class ISMBlob(ism_base.ISMBase):
                 ctypes.memmove(data_layout.descr, descr, descr_size)
                 lockattr = pthread_rwlockattr_t()
                 lockattr_ref = ctypes.byref(lockattr)
-                pthread_rwlockattr_init(lockattr_ref)
+                lib.pthread_rwlockattr_init(lockattr_ref)
                 try:
-                    pthread_rwlockattr_setpshared(lockattr_ref, PTHREAD_PROCESS_SHARED)
+                    lib.pthread_rwlockattr_setpshared(lockattr_ref, PTHREAD_PROCESS_SHARED)
                     _refcount_lock = ctypes.byref(self._refcount_header.refcount_lock)
-                    pthread_rwlock_init(_refcount_lock, lockattr_ref)
+                    lib.pthread_rwlock_init(_refcount_lock, lockattr_ref)
                     self._refcount_lock = _refcount_lock # don't set this attribute from None until we know the rwlock has been inited
                 finally:
-                    pthread_rwlockattr_destroy(lockattr_ref)
+                    lib.pthread_rwlockattr_destroy(lockattr_ref)
                 with self.lock_refcount():
                     self._refcount_header.refcount = 1
                 # finally, set the magic cookie saying that this thing is ready to go
@@ -263,25 +192,24 @@ class ISMBlob(ism_base.ISMBase):
         except BaseException as e:
             # something failed somewhere in setting things up
             if create and hasattr(self, '_refcount_lock'):
-                pthread_rwlock_destroy(self._refcount_lock)
+                lib.pthread_rwlock_destroy(self._refcount_lock)
 
-            if hasattr(self, '_mmap_data'):
-                # if we mmap'd data, munmap it
-                munmap(self._mmap_data, self._mmap_size)
+            if hasattr(self, '_mmap'):
+                self._mmap.close()
 
             if hasattr(self, '_fd'):
                 # if we got an fd open, close it
                 os.close(self._fd)
                 if create:
-                    shm_unlink(self._name)
+                    lib.shm_unlink(self._name)
             raise e
 
 
     @contextlib.contextmanager
     def lock_refcount(self):
-        pthread_rwlock_wrlock(self._refcount_lock)
+        lib.pthread_rwlock_wrlock(self._refcount_lock)
         yield
-        pthread_rwlock_unlock(self._refcount_lock)
+        lib.pthread_rwlock_unlock(self._refcount_lock)
 
     def __del__(self):
         if not self._all_allocated:
@@ -303,11 +231,11 @@ class ISMBlob(ism_base.ISMBase):
             if self._refcount_header.refcount == 0:
                 destroy = True
         if destroy:
-            pthread_rwlock_destroy(self._refcount_lock)
-        munmap(self._mmap_data, self._mmap_size)
+            lib.pthread_rwlock_destroy(self._refcount_lock)
+        self._mmap.close()
         os.close(self._fd)
         if destroy:
-            shm_unlink(self._name)
+            lib.shm_unlink(self._name)
 
     @property
     def name(self):
