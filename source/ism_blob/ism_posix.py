@@ -121,7 +121,7 @@ class ISMBlob(ism_base.ISMBase):
     def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
         '''Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
         by owner".'''
-        self._all_allocated = False
+        super().__init__()
         self._name = str(name).encode('utf-8') if type(name) is not bytes else name
         try:
             # first, figure out the sizes of everything. Easy if we're creating the blob; requires a bit of digging if not
@@ -188,8 +188,8 @@ class ISMBlob(ism_base.ISMBase):
                 self._refcount_lock = ctypes.byref(self._refcount_header.refcount_lock)
                 with self.lock_refcount():
                     self._refcount_header.refcount += 1
-            self._all_allocated = True
-        except BaseException as e:
+            self.closed = False
+        except:
             # something failed somewhere in setting things up
             if create and hasattr(self, '_refcount_lock'):
                 lib.pthread_rwlock_destroy(self._refcount_lock)
@@ -202,7 +202,7 @@ class ISMBlob(ism_base.ISMBase):
                 os.close(self._fd)
                 if create:
                     lib.shm_unlink(self._name)
-            raise e
+            raise
 
 
     @contextlib.contextmanager
@@ -211,8 +211,8 @@ class ISMBlob(ism_base.ISMBase):
         yield
         lib.pthread_rwlock_unlock(self._refcount_lock)
 
-    def __del__(self):
-        if not self._all_allocated:
+    def close(self):
+        if self.closed:
             # in the case of incomplete init, the init function cleans up after itself
             return
         destroy = False
@@ -236,12 +236,15 @@ class ISMBlob(ism_base.ISMBase):
         os.close(self._fd)
         if destroy:
             lib.shm_unlink(self._name)
-
+        self.closed = True
+    
     @property
     def name(self):
         return self._name.decode('utf-8')
 
     @property
     def shared_refcount(self):
+        if self.closed:
+            raise RuntimeError('operation on closed ISMBlob')
         with self.lock_refcount():
             return self._refcount_header.refcount

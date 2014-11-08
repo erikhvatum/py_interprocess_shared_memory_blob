@@ -30,22 +30,34 @@ class ISMBase:
     _MAGIC_COOKIE = b'\xF0\x0A'
 
     @classmethod
-    def open_ism_array(cls, name):
-        return cls(name).typed_numpy_view()
+    def open(cls, name):
+        return cls(name)
 
     @classmethod
-    def new_ism_array(cls, name, shape, dtype, order='C', permissions=0o600):
+    def new(cls, name, shape, dtype, order='C', permissions=0o600):
         dtype = numpy.dtype(dtype)
         size = numpy.multiply.reduce(shape, dtype=int) * dtype.itemsize
         descr = pickle.dumps((dtype, shape, order), protocol=-1)
-        return cls(name, create=True, permissions=permissions, size=size, descr=descr).typed_numpy_view()
+        return cls(name, create=True, permissions=permissions, size=size, descr=descr)
 
-    def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
-        '''Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
-        by owner".  This parameter is ignored on win32.'''
+    def __init__(self):
+        self.closed = True
+
+    def __del__(self):
+        self.close() # just in case we get to del-time and haven't been properly closed yet
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.close()
+
+    def close(self):
         raise NotImplementedError()
 
-    def typed_numpy_view(self):
+    def asarray(self):
+        if self.closed:
+            raise RuntimeError('operation on closed ISMBlob')
         array = numpy.array(self, dtype=numpy.uint8, copy=False)
         if self.descr:
             dtype, shape, order = pickle.loads(self.descr)
