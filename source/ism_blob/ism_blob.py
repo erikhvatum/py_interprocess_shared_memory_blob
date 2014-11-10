@@ -23,6 +23,7 @@
 # Authors: Erik Hvatum, Zach Pincus
 
 import sys
+import contextlib
 
 if sys.platform == 'win32':
     from . import ism_win32 as ism_impl
@@ -30,3 +31,37 @@ else:
     from . import ism_posix as ism_impl
 
 ISMBlob = ism_impl.ISMBlob
+
+@contextlib.contextmanager
+def new_ism_array(name, shape, dtype, order='C', permissions=0o600):
+    """Context manager for creating a shared interprocess numpy array:
+    with new_ism_array('foo', (10,10), int) as arr:
+        arr.fill(353)
+        send_arr_to_other_process()
+    
+    After the with-block ends, the shared memory blob will be deleted unless
+    another process has opened the array too.
+    
+    Note: accessing the array outside of the with block WILL segfault."""
+    ism = ISMBlob.new(name, shape, dtype, order, permissions)
+    try:
+        yield ism.asarray()
+    finally:
+        ism.close()
+
+@contextlib.contextmanager
+def open_ism_array(name):
+    """Context manager for opening an existing shared interprocess numpy array:
+    with open_ism_array('foo') as arr:
+        sum = arr.sum()
+    
+    After the with-block ends, the shared memory blob will be deleted unless
+    other processes have the array still open.
+    
+    Note: accessing the array outside of the with block WILL segfault."""
+    ism = ISMBlob.open(name)
+    try:
+        yield ism.asarray()
+    finally:
+        ism.close()
+

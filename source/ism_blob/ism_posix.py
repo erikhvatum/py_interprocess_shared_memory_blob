@@ -208,8 +208,10 @@ class ISMBlob(ism_base.ISMBase):
     @contextlib.contextmanager
     def lock_refcount(self):
         lib.pthread_rwlock_wrlock(self._refcount_lock)
-        yield
-        lib.pthread_rwlock_unlock(self._refcount_lock)
+        try:
+            yield
+        finally:
+            lib.pthread_rwlock_unlock(self._refcount_lock)
 
     def close(self):
         if self.closed:

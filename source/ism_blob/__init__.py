@@ -22,6 +22,6 @@
 #
 # Authors: Erik Hvatum, Zach Pincus
 
-from .ism_blob import ISMBlob
+from .ism_blob import ISMBlob, new_ism_array, open_ism_array
 
 __version__ = '0.6'

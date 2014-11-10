@@ -31,10 +31,44 @@ class ISMBase:
 
     @classmethod
     def open(cls, name):
+        """Open an existing shared interprocess numpy array:
+        blob = ISMBlob.open('foo')
+        arr = blob.asarray()
+        arr.fill(353)
+        send_arr_to_other_process(arr)
+        blob.close()
+
+        After closing, the shared memory blob will be deleted unless
+        another process has opened the blob too.
+        
+        This also works as a context manager:
+        with ISMBlob.open('foo') as blob:
+            [etc.]
+        
+        Note: accessing an array created with the asarray() method after the
+        blob has been closed WILL segfault."""
+        
         return cls(name)
 
     @classmethod
     def new(cls, name, shape, dtype, order='C', permissions=0o600):
+        """Create a shared interprocess numpy array:
+        blob = ISMBlob.new('foo', (10,10), int)
+        arr = blob.asarray()
+        arr.fill(353)
+        send_arr_to_other_process(arr)
+        blob.close()
+
+        After closing, the shared memory blob will be deleted unless
+        another process has opened the blob too.
+        
+        This also works as a context manager:
+        with ISMBlob.new('foo', (10,10), int) as blob:
+            [etc.]
+        
+        Note: accessing an array created with the asarray() method after the
+        blob has been closed WILL segfault."""
+        
         dtype = numpy.dtype(dtype)
         size = numpy.multiply.reduce(shape, dtype=int) * dtype.itemsize
         descr = pickle.dumps((dtype, shape, order), protocol=-1)
