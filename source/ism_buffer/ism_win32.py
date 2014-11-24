@@ -62,7 +62,7 @@ _PAGE_READWRITE = 0x04
 _WAIT_TIMEOUT = 0x102
 _WAIT_ABANDONED = 0x80
 
-class _ISMBlobHeader(ctypes.Structure):
+class _ISMBufferHeader(ctypes.Structure):
     '''On win32, first comes the struct, then comes the refCountLock mutex name (no null terminator - length is specified
     in header refCountMutexNameLength field).'''
     _fields_ = [
@@ -71,6 +71,6 @@ class _ISMBlobHeader(ctypes.Structure):
         ('refCountMutexNameLength', ctypes.c_uint16)
     ]
 
-_ISMBlobHeader_p = ctypes.POINTER(_ISMBlobHeader)
+_ISMBufferHeader_p = ctypes.POINTER(_ISMBufferHeader)
 
 raise NotImplementedError('win32 support is under construction [insert geocities_under_construction.gif here]')

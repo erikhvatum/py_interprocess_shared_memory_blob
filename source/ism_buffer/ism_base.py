@@ -24,7 +24,7 @@
 
 
 import numpy
-import pickle
+import json
 
 class ISMBase:
     _MAGIC_COOKIE = b'\xF0\x0A'
@@ -32,68 +32,36 @@ class ISMBase:
     @classmethod
     def open(cls, name):
         """Open an existing shared interprocess numpy array:
-        blob = ISMBlob.open('foo')
-        arr = blob.asarray()
+        buffer = ISMBuffer.open('foo')
+        arr = buffer.asarray()
         arr.fill(353)
         send_arr_to_other_process(arr)
-        blob.close()
-
-        After closing, the shared memory blob will be deleted unless
-        another process has opened the blob too.
-        
-        This also works as a context manager:
-        with ISMBlob.open('foo') as blob:
-            [etc.]
-        
-        Note: accessing an array created with the asarray() method after the
-        blob has been closed WILL segfault."""
+        """
         
         return cls(name)
 
     @classmethod
     def new(cls, name, shape, dtype, order='C', permissions=0o600):
         """Create a shared interprocess numpy array:
-        blob = ISMBlob.new('foo', (10,10), int)
-        arr = blob.asarray()
+        buffer = ISMBuffer.new('foo', (10,10), int)
+        arr = buffer.asarray()
         arr.fill(353)
-        send_arr_to_other_process(arr)
-        blob.close()
-
-        After closing, the shared memory blob will be deleted unless
-        another process has opened the blob too.
-        
-        This also works as a context manager:
-        with ISMBlob.new('foo', (10,10), int) as blob:
-            [etc.]
-        
-        Note: accessing an array created with the asarray() method after the
-        blob has been closed WILL segfault."""
+        send_arr_to_other_process(arr)"""
         
         dtype = numpy.dtype(dtype)
+        dtype_str = numpy.lib.format.dtype_to_descr(dtype)
         size = numpy.multiply.reduce(shape, dtype=int) * dtype.itemsize
-        descr = pickle.dumps((dtype, shape, order), protocol=-1)
+        descr = json.dumps((dtype_str, shape, order)).encode('ascii')
         return cls(name, create=True, permissions=permissions, size=size, descr=descr)
 
-    def __init__(self):
-        self.closed = True
-
-    def __del__(self):
-        self.close() # just in case we get to del-time and haven't been properly closed yet
+    def __init__(self, name, create, permissions, size, descr):
+        pass
     
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        self.close()
-
-    def close(self):
-        raise NotImplementedError()
-
     def asarray(self):
         if self.closed:
-            raise RuntimeError('operation on closed ISMBlob')
+            raise RuntimeError('operation on closed ISMBuffer')
         array = numpy.array(self, dtype=numpy.uint8, copy=False)
         if self.descr:
-            dtype, shape, order = pickle.loads(self.descr)
+            dtype, shape, order = json.loads(self.descr.decode('ascii'))
             array = numpy.ndarray(shape, dtype=dtype, order=order, buffer=array)
         return array

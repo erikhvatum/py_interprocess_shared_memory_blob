@@ -36,6 +36,7 @@ import errno
 import os
 import mmap
 import sys
+import weakref
 
 from . import ism_base
 
@@ -55,7 +56,7 @@ elif sys.platform == 'darwin':
     pthread_rwlockattr_t = ctypes.c_byte * 24
     pthread_rwlock_t = ctypes.c_byte * 200
 else:
-    raise NotImplementedError("ism_blob's POSIX implementation is currently only for Linux and Darwin")
+    raise NotImplementedError("ism_buffer's POSIX implementation is currently only for Linux and Darwin")
 
 pthread_rwlockattr_t_p = ctypes.POINTER(pthread_rwlockattr_t)
 pthread_rwlock_t_p = ctypes.POINTER(pthread_rwlock_t)
@@ -101,7 +102,7 @@ API = [
 for func_name, argtypes, err in API:
     register_lib_func(func_name, argtypes, err)
 
-# layout of ISMBlob: SizeHeader, descr, data, RefCountHeader
+# layout of ISMBuffer: SizeHeader, descr, data, RefCountHeader
 # RefCountHeader is last so that clients that don't care about refcounting
 # and make the server just hold onto the buffer can just ignore it.
 class SizeHeader(ctypes.Structure):
@@ -117,20 +118,29 @@ class RefCountHeader(ctypes.Structure):
         ('refcount', ctypes.c_uint64),
     ]
 
-class ISMBlob(ism_base.ISMBase):    
+@contextlib.contextmanager
+def locking(lock):
+    lib.pthread_rwlock_wrlock(lock)
+    try:
+        yield
+    finally:
+        lib.pthread_rwlock_unlock(lock)
+
+class ISMBuffer(ism_base.ISMBase):
     def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
         '''Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
         by owner".'''
-        super().__init__()
+        super().__init__(name, create, permissions, size, descr)
         self._name = str(name).encode('utf-8') if type(name) is not bytes else name
+        mmap_f, refcount_lock, fd = None, None, None # if an error happens in init, non-None values are an indication that these need to be cleaned up
         try:
-            # first, figure out the sizes of everything. Easy if we're creating the blob; requires a bit of digging if not
+            # first, figure out the sizes of everything. Easy if we're creating the buffer; requires a bit of digging if not
             if create:
                 self.size = size
                 descr_size = len(descr)
             else:
-                self._fd = lib.shm_open(self._name, os.O_RDWR, 0)
-                with mmap.mmap(self._fd, ctypes.sizeof(SizeHeader), prot=mmap.PROT_READ) as size_header_mmap:
+                fd = lib.shm_open(self._name, os.O_RDWR, 0)
+                with mmap.mmap(fd, ctypes.sizeof(SizeHeader), prot=mmap.PROT_READ) as size_header_mmap:
                     size_header = SizeHeader.from_buffer_copy(size_header_mmap)
                     assert size_header.magic_cookie == self._MAGIC_COOKIE
                     self.size = size_header.data_size
@@ -139,20 +149,20 @@ class ISMBlob(ism_base.ISMBase):
             class DataLayout(ctypes.Structure):
                 _fields_ = [
                     ('size_header', SizeHeader),
-                    ('descr', ctypes.c_ubyte*descr_size),
-                    ('data', ctypes.c_ubyte*self.size),
+                    ('descr', ctypes.c_uint8*descr_size),
+                    ('data', ctypes.c_uint8*self.size),
                     ('refcount_header', RefCountHeader)
                 ]
             mmap_size = ctypes.sizeof(DataLayout)
         
             if create:
                 # if we're creating it, open the fd now. If it was extant, the fd already got opened above
-                self._fd = lib.shm_open(self._name, os.O_RDWR | os.O_CREAT | os.O_EXCL, permissions)
-                os.ftruncate(self._fd, mmap_size)
+                fd = lib.shm_open(self._name, os.O_RDWR | os.O_CREAT | os.O_EXCL, permissions)
+                os.ftruncate(fd, mmap_size)
             
-            self._mmap = mmap.mmap(self._fd, mmap_size)
-            data_layout = DataLayout.from_buffer(self._mmap)
-            self._refcount_header = data_layout.refcount_header
+            mmap_f = mmap.mmap(fd, mmap_size)
+            data_layout = DataLayout.from_buffer(mmap_f)
+            refcount_header = data_layout.refcount_header
             self.data = data_layout.data
             self.__array_interface__ = {
                 'shape': (self.size,),
@@ -173,72 +183,42 @@ class ISMBlob(ism_base.ISMBase):
                 lib.pthread_rwlockattr_init(lockattr_ref)
                 try:
                     lib.pthread_rwlockattr_setpshared(lockattr_ref, PTHREAD_PROCESS_SHARED)
-                    _refcount_lock = ctypes.byref(self._refcount_header.refcount_lock)
+                    _refcount_lock = ctypes.byref(refcount_header.refcount_lock)
                     lib.pthread_rwlock_init(_refcount_lock, lockattr_ref)
-                    self._refcount_lock = _refcount_lock # don't set this attribute from None until we know the rwlock has been inited
+                    refcount_lock = _refcount_lock # don't set this attribute until we know the rwlock has been inited
                 finally:
                     lib.pthread_rwlockattr_destroy(lockattr_ref)
-                with self.lock_refcount():
-                    self._refcount_header.refcount = 1
+                with locking(refcount_lock):
+                    refcount_header.refcount = 1
                 # finally, set the magic cookie saying that this thing is ready to go
                 size_header.magic_cookie = self._MAGIC_COOKIE
         
             else:
                 self.descr = bytes(data_layout.descr)
-                self._refcount_lock = ctypes.byref(self._refcount_header.refcount_lock)
-                with self.lock_refcount():
-                    self._refcount_header.refcount += 1
-            self.closed = False
+                refcount_lock = ctypes.byref(refcount_header.refcount_lock)
+                with locking(refcount_lock):
+                    refcount_header.refcount += 1
+            
+            self._refcount_header = refcount_header
+            # instead of having a __del__ method, we'll use weakref.finalize, which is called BOTH when the object is deleted
+            # AND when the system exits.
+            finalizer = Finalizer(self._name, refcount_header, mmap_f, fd)
+            weakref.finalize(self, finalizer)
+            
         except:
             # something failed somewhere in setting things up
-            if create and hasattr(self, '_refcount_lock'):
-                lib.pthread_rwlock_destroy(self._refcount_lock)
+            if create and refcount_lock is not None:
+                lib.pthread_rwlock_destroy(refcount_lock)
 
-            if hasattr(self, '_mmap'):
-                self._mmap.close()
+            if mmap_f is not None:
+                mmap_f.close()
 
-            if hasattr(self, '_fd'):
+            if fd is not None:
                 # if we got an fd open, close it
-                os.close(self._fd)
+                os.close(fd)
                 if create:
                     lib.shm_unlink(self._name)
             raise
-
-
-    @contextlib.contextmanager
-    def lock_refcount(self):
-        lib.pthread_rwlock_wrlock(self._refcount_lock)
-        try:
-            yield
-        finally:
-            lib.pthread_rwlock_unlock(self._refcount_lock)
-
-    def close(self):
-        if self.closed:
-            # in the case of incomplete init, the init function cleans up after itself
-            return
-        destroy = False
-            
-        # The refcount lock resides within the shared memory region to be destroyed and thus does not prevent
-        # another thread in the same process from initiating a deep copy of this ISM object in the interval between
-        # refcount lock release and completion of this destructor function. However, if this destructor is executing,
-        # it is as a consequence of no Python references to this object remaining, precluding the possibility of a copy
-        # operation being initiated except behind the interpreter's back. Therefore, a second in-process lock
-        # to guard against this is not required. Additionally, if refcount reaches zero below, no other processes
-        # are still referring to the shared memory, precluding the possibility of a copy operation in *another process*
-        # during the interval between refLock destruction and completion of this destructor function, so a second
-        # shared-process lock to guard against this is not required.
-        with self.lock_refcount():
-            self._refcount_header.refcount -= 1
-            if self._refcount_header.refcount == 0:
-                destroy = True
-        if destroy:
-            lib.pthread_rwlock_destroy(self._refcount_lock)
-        self._mmap.close()
-        os.close(self._fd)
-        if destroy:
-            lib.shm_unlink(self._name)
-        self.closed = True
     
     @property
     def name(self):
@@ -246,7 +226,28 @@ class ISMBlob(ism_base.ISMBase):
 
     @property
     def shared_refcount(self):
-        if self.closed:
-            raise RuntimeError('operation on closed ISMBlob')
-        with self.lock_refcount():
+        with locking(ctypes.byref(self._refcount_header.refcount_lock)):
             return self._refcount_header.refcount
+
+class Finalizer:    
+    def __init__(self, name, refcount_header, mmap_f, fd):
+        self.name = name
+        self.refcount_header = refcount_header
+        self.mmap_f = mmap_f
+        self.fd = fd
+    
+    def __call__(self):
+        destroy = False
+        refcount_lock = ctypes.byref(self.refcount_header.refcount_lock)
+        with locking(refcount_lock):
+            self.refcount_header.refcount -= 1
+            if self.refcount_header.refcount == 0:
+                destroy = True        
+        if destroy:
+            lib.pthread_rwlock_destroy(refcount_lock)
+        self.mmap_f.close()
+        os.close(self.fd)
+        if destroy:
+            lib.shm_unlink(self.name)
+
+    

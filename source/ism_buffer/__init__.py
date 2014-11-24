@@ -22,6 +22,9 @@
 #
 # Authors: Erik Hvatum, Zach Pincus
 
-from .ism_blob import ISMBlob, new_ism_array, open_ism_array
+from .ism_buffer import ISMBuffer
+
+new = ISMBuffer.new
+open = ISMBuffer.open
 
 __version__ = '0.6'
