@@ -58,8 +58,6 @@ class ISMBase:
         pass
     
     def asarray(self):
-        if self.closed:
-            raise RuntimeError('operation on closed ISMBuffer')
         array = numpy.array(self, dtype=numpy.uint8, copy=False)
         if self.descr:
             dtype, shape, order = json.loads(self.descr.decode('ascii'))
