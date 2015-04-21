@@ -128,13 +128,13 @@ def locking(lock):
 
 class ISMBuffer(ism_base.ISMBase):
     def __init__(self, name, create=False, permissions=0o600, size=0, descr=b''):
-        '''Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
-        by owner".'''
+        """Note: The default value for createPermissions, 0o600, or 384, represents the unix permission "readable/writeable
+        by owner"."""
         super().__init__(name, create, permissions, size, descr)
         self._name = str(name).encode('utf-8') if type(name) is not bytes else name
-        mmap_f, refcount_lock, fd = None, None, None # if an error happens in init, non-None values are an indication that these need to be cleaned up
+        mmap_f, refcount_lock, fd = None, None, None # If an error happens in init, non-None values are an indication that these need to be cleaned up
         try:
-            # first, figure out the sizes of everything. Easy if we're creating the buffer; requires a bit of digging if not
+            # First, figure out the sizes of everything. Easy if we're creating the buffer; requires a bit of digging if not.
             if create:
                 self.size = size
                 descr_size = len(descr)
@@ -156,19 +156,19 @@ class ISMBuffer(ism_base.ISMBase):
             mmap_size = ctypes.sizeof(DataLayout)
         
             if create:
-                # if we're creating it, open the fd now. If it was extant, the fd already got opened above
+                # If we're creating it, open the fd now. If it was extant, the fd already got opened above.
                 fd = lib.shm_open(self._name, os.O_RDWR | os.O_CREAT | os.O_EXCL, permissions)
                 os.ftruncate(fd, mmap_size)
             
             mmap_f = mmap.mmap(fd, mmap_size)
             data_layout = DataLayout.from_buffer(mmap_f)
             refcount_header = data_layout.refcount_header
-            self.data = data_layout.data
+            data = data_layout.data
             self.__array_interface__ = {
                 'shape': (self.size,),
                 'typestr':'|u1',
                 'version':3,
-                'data':(ctypes.addressof(self.data), False)
+                'data':(ctypes.addressof(data), False)
             }
         
             if create:
@@ -199,7 +199,7 @@ class ISMBuffer(ism_base.ISMBase):
                 with locking(refcount_lock):
                     refcount_header.refcount += 1
             
-            self._refcount_header = refcount_header
+            self._refcount_header = weakref.ref(refcount_header)
             # instead of having a __del__ method, we'll use weakref.finalize, which is called BOTH when the object is deleted
             # AND when the system exits.
             finalizer = Finalizer(self._name, refcount_header, mmap_f, fd)
@@ -226,8 +226,10 @@ class ISMBuffer(ism_base.ISMBase):
 
     @property
     def shared_refcount(self):
-        with locking(ctypes.byref(self._refcount_header.refcount_lock)):
-            return self._refcount_header.refcount
+        refcount_header = self._refcount_header()
+        if refcount_header is not None:
+            with locking(ctypes.byref(refcount_header.refcount_lock)):
+                return refcount_header.refcount
 
 class Finalizer:    
     def __init__(self, name, refcount_header, mmap_f, fd):
@@ -245,6 +247,8 @@ class Finalizer:
                 destroy = True        
         if destroy:
             lib.pthread_rwlock_destroy(refcount_lock)
+        del self.refcount_header
+        del refcount_lock
         self.mmap_f.close()
         os.close(self.fd)
         if destroy:
